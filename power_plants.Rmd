@@ -1,0 +1,581 @@
+---
+title: "Power Plants"
+author: "Valentino Mascherini"
+date: "`r Sys.Date()`"
+output: 
+  bookdown::pdf_document2: 
+    number_sections: yes
+    toc: FALSE
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, include = F)
+```
+
+
+```{r}
+library(knitr)
+```
+
+
+# Power plants optimisation
+
+## Research question
+
+In this simplified model, the aim is to  limit environmental impacts and wastes, while reaching the electrical power [MWh] needed by the city of Berlin. This is achieved by finding the optimal combination of power plants who need to be producing electricity. Between those, their differences are: primary fuel, capacity [MWh], distance to the city. Other parameters are decided by the primary fuel or "type".
+The parameters can also be switched to act as constraints/objectives in other scenarios. The generators are so characterised:
+
+```{r, echo = F, include=T}
+
+kable(c("Name","Type of fuel", "Capacity [MWh]", "Efficiency [%]", "Distance [km]", "Emission potential"))
+
+```
+
+### Results
+
+The model shall choose which power plant is to be activated in order to reach the needed power, while not exceeding set limits to environmental impacts.
+
+### Scenario 1: Environmental impacts minimisation
+
+Objective function: 
+
+- minimum CO2 emissions
+
+eventually add:
+
+- min generation losses
+- min distance (transport losses)
+
+Constraints:
+
+- meet needed MWh 
+
+### Scenario 2: Electricity generation maximisation
+
+Obj:
+
+- max production capacity
+
+Constraints:
+
+- GHG emissions
+- power losses
+
+## Input and output
+
+This model has the following inputs:
+
+- type,
+- generation capacity [MWh],
+- emission potential [kgCO2/MWh] [gCH4/MWh] [gN2O/MWh],
+- coordinates [m],
+- generation efficiency [%].
+
+Outputs:
+
+- emissions [kgCO2] [gCH4] [gN2O],
+- distance to Berlin [km],
+- wasted power (generation)  [MWh],
+- wasted power (transmission) [MWh],
+- which generators are to be activated, which capacity [MWh].
+
+
+## Berlin energy consumption
+
+https://www.stromnetz.berlin/globalassets/dokumente/presse/faktenblatt-stromnetz-berlin.pdf
+
+12.6 TWh/yr -> 1438.356 MWh mean
+
+2200 MWh daytime
+800 MWh nighttime
+
+
+```{r}
+library(tidyverse)
+
+setwd("C://Users//valen//Documents//Freiburg//BOKU//WT23//ApplMath//Project")
+
+power_plants <- read.csv("global_power_plant_database.csv")
+
+colnames(power_plants)
+
+pp_deu <- power_plants %>% 
+  filter(country == "DEU")
+
+#summary(pp_deu)
+
+deu_map <- map_data("world", "Germany")
+
+```
+
+```{r}
+setwd("C://Users//valen//Documents//Freiburg//BOKU//WT23//ApplMath//Project")
+
+deu_cit <- read.csv("de.csv")
+str(deu_cit)
+
+```
+
+```{r}
+
+eff <- data.frame(type = unique(pp_deu$primary_fuel), 
+                  efficiency = c("49", "25", "17", "37", "87", "40", "40", "40", "0.27", NA))
+
+pp_deu_short <- pp_deu %>% 
+  select(longitude, latitude, capacity_mw, primary_fuel, generation_gwh_2018 )
+
+pp_deu_berl <- pp_deu %>% 
+  filter(latitude >= 50 & latitude <= 55 & longitude >= 11 & longitude <= 15) %>% 
+  select(longitude, latitude, name,capacity_mw, primary_fuel)
+
+pp_deu_berl$primary_fuel <- as.factor(pp_deu_berl$primary_fuel)
+
+sum(pp_deu_berl$capacity_mw)
+
+
+
+summ_fuels <- pp_deu_berl %>% group_by(as.factor(primary_fuel)) %>%  
+  summarise(mean = mean(capacity_mw), sum = sum(capacity_mw), pcnt = sum(capacity_mw)/27303.81) %>% 
+  arrange(sum)
+
+
+
+knitr::kable(summ_fuels, caption = "Statistics of different generator types' capacity in MWh")
+
+# pp_deu_berl %>% filter(primary_fuel == "Coal")  %>% summarise(mean = mean(capacity_mw)) %>% 
+#   arrange(mean)
+
+```
+
+
+```{r}
+library(sf)
+
+berl <- st_as_sf(pp_deu_berl, coords = c("longitude", "latitude"), crs = 4326)
+
+berl_wsg <- st_transform(berl, 32633)
+
+berlin <- data.frame(x = st_coordinates(berl_wsg)[,1], y = st_coordinates(berl_wsg)[,2])
+
+berlin
+
+b_point <- c(391779.25, 5820072.15)
+
+
+cities <- st_as_sf(deu_cit, coords = c("lng", "lat"), crs = 4326)
+
+cities_wsg <- st_transform(cities, 32633)
+
+cities <- data.frame(x = st_coordinates(cities_wsg)[,1], y = st_coordinates(cities_wsg)[,2])
+
+# plot(berlin)
+# points(b_point[1], b_point[2], col = "red")
+
+```
+
+```{r}
+
+pp_deu_berl <- pp_deu_berl %>% 
+  mutate(distance = sqrt((berlin$x - b_point[1])^2 + (berlin$y - b_point[2])^2))
+
+summary(pp_deu_berl$distance)
+
+deu_cit$distance <-  sqrt((cities$x - b_point[1])^2 + (cities$y - b_point[2])^2)
+
+summary(pp_deu_berl$distance)
+
+```
+
+```{r}
+
+ggplot(pp_deu_berl) +
+  geom_boxplot(aes(x = primary_fuel,y = capacity_mw, group = primary_fuel)) +
+  facet_wrap(.~ primary_fuel, scales = "free") 
+  
+
+```
+
+
+Berlin coordinates long = 13.4050, lat = 52.5200.
+
+```{r, eval = F, include = F}
+ggplot() +
+  #geom_polygon( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group), fill ="lightgrey") +
+  geom_path( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group)) +
+  geom_point(aes(x = pp_deu$longitude, y = pp_deu$latitude, 
+                 color = as.factor(pp_deu$primary_fuel)#, shape = as.factor(pp_deu$primary_fuel)
+                 )) +
+  xlab("Longitude") + ylab("Latitude")+
+  scale_color_discrete(name = "Primary fuel") +
+  #geom_point(aes(x = 13.4050, y = 52.5200), fill = "red", color = "black", shape = 21, size = 4) +
+  geom_point(aes(x = head(deu_cit$lng, 8), y = head(deu_cit$lat, 8)), 
+             fill = "red", color = "black", shape = 21, size = 4)+
+  geom_text(aes(x = head(deu_cit$lng, 8), y = head(deu_cit$lat, 8), label = head(deu_cit$city, 8))) +
+  #geom_text(aes(x = 14.050, y = 52.5200,label = "Berlin")) +
+  #xlim(c(11, 15)) + ylim(c(50,55)) +
+  coord_equal() +
+  ggtitle("Power plants in Germany")
+```
+
+
+```{r, eval = T, echo = F, include = F}
+ggplot() +
+  #geom_polygon( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group), fill ="lightgrey") +
+  geom_path( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group)) +
+  geom_point(aes(x = pp_deu$longitude, y = pp_deu$latitude, 
+                 color = as.factor(pp_deu$primary_fuel)#, shape = as.factor(pp_deu$primary_fuel)
+                 )) +
+  xlab("Longitude") + ylab("Latitude")+
+  scale_color_discrete(name = "Primary fuel") +
+  geom_point(aes(deu_cit$lng, deu_cit$lat), fill = "red", color = "black", shape = 21, size = 2) +
+  geom_point(aes(x = 13.4050, y = 52.5200), fill = "red", color = "black", shape = 21, size = 4) +
+  geom_text(aes(x = 14.050, y = 52.5200,label = "Berlin")) +
+  xlim(c(11, 15)) + ylim(c(50,55)) +
+  coord_equal() +
+  ggtitle("Power plants in Eastern Germany")
+
+```
+
+
+```{r}
+cit_berl <- deu_cit %>% 
+  filter(distance < 65000# & capacity_mw > 100
+         )
+
+pp_berl <- pp_deu_berl %>% 
+  filter(distance < 65000# & capacity_mw > 100
+         )
+
+pp_berl %>% summarise(sum(capacity_mw))
+str(pp_berl)
+```
+
+```{r}
+
+ggplot() +
+  #geom_polygon( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group), fill ="lightgrey") +
+  geom_path( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group)) +
+  geom_point(aes(x = pp_berl$longitude, y = pp_berl$latitude, 
+                 color = as.factor(pp_berl$primary_fuel)#, shape = as.factor(pp_berl$primary_fuel)
+                 )) +
+  xlab("Longitude") + ylab("Latitude")+
+  scale_color_discrete(name = "Primary fuel") +
+  #geom_point(aes(cit_berl$lng, cit_berl$lat), fill = "red", color = "black", shape = 21, size = 2) +
+  geom_point(aes(x = 13.4050, y = 52.5200), fill = "red", color = "black", shape = 21, size = 4) +
+  geom_text(aes(x = 14.050, y = 52.5200,label = "Berlin")) +
+  xlim(c(11, 15)) + ylim(c(50,55)) +
+  coord_equal() +
+  ggtitle("Power plants in Germany")
+
+
+
+```
+
+
+```{r, include = F}
+
+cit_berl %>%  filter(city == "Berlin")
+
+1438.356/3644826
+
+e_pop <- data.frame(pop = c(3644826, 182219, 5426
+), energy = c(1438, 63, 3.5))
+
+plot(e_pop)
+
+energy <- lm(data = e_pop, log(energy) ~ (pop))
+
+l_m <- loess(energy ~ pop, data = e_pop)
+
+summary(l_m)
+
+pop <- data.frame(pop = cit_berl$population)
+
+cit_berl$MWh <- round(predict(l_m, pop), 2)
+
+```
+
+```{r}
+
+sum(cit_berl$MWh)
+
+sum(pp_berl$capacity_mw)
+
+```
+
+\newpage
+
+# Area of interest
+
+```{r, echo = F, include = T, warning=F}
+
+g1 <-ggplot() +
+  #geom_polygon( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group), fill ="lightgrey") +
+  geom_path( aes(x = deu_map$long, y = deu_map$lat, group = deu_map$group)) +
+  geom_point(aes(x = pp_berl$longitude, y = pp_berl$latitude, 
+                 color = as.factor(pp_berl$primary_fuel)#, shape = as.factor(pp_berl$primary_fuel)
+                 )) +
+  xlab("Longitude") + ylab("Latitude")+
+  scale_color_discrete(name = "Fuel") +
+  #geom_point(aes(cit_berl$lng, cit_berl$lat), fill = "red", color = "black", shape = 21, size = 2) +
+  geom_point(aes(x = 13.4050, y = 52.5200), fill = "red", color = "black", shape = 21, size = 4) +
+  geom_text(aes(x = 14.050, y = 52.5200,label = "Berlin")) +
+  xlim(c(12.4, 14.8)) + ylim(c(51.9,53.1)) +
+  coord_equal() #+
+  #ggtitle("Power plants in a 65 km range from Berlin")
+
+save(g1, file ="map.RData")
+
+colz <- c("biomass" = "#66C2A5", "coal" = "#FC8D62",   "oil" =  "#8DA0CB", "solar" = "#E78AC3", 
+          "waste" = "#A6D854",  "wind" = "#FFD92F",  "gas" = "#E5C494")
+
+
+
+g2 <- pp_berl %>% group_by(primary_fuel) %>% summarise(cap = sum(capacity_mw)) %>% 
+  ggplot() +
+  geom_col(aes(x = primary_fuel, y = cap, fill =  tolower(primary_fuel))) +
+  scale_fill_manual(values = colz) +
+  labs(fill = "Fuel")+
+  theme(axis.text.x=element_blank(),
+  axis.ticks.x=element_blank()) +
+  xlab("Fuel") + ylab("Power generation [MWh]")
+
+save(g2, file = "pp_hist.RData")
+
+ggsave("map.jpg", plot = g1)
+ggsave("hist.jpg", plot = g2)
+
+```
+
+We take the generators in a range of 75 kms to Berlin, which are 83. The model will tell us which generators to activate (if to "allocate" the capacity in the total need of Berlin) in order to reach our objectives while constrained by some environmental impact parameters.
+
+```{r, include=F}
+pp_berl <- pp_deu_berl %>% 
+  filter(distance < 65000#15000# & capacity_mw > 100
+         )
+
+kable(sum(pp_berl$capacity_mw))
+```
+
+
+```{r, echo =F, include = T}
+kable(head(pp_berl %>% summarise(name=name,type = primary_fuel, capacity_mw = capacity_mw, distance_km = distance/1000), 10), caption ="First ten generator data")
+```
+
+
+```{r, echo =F, include = T}
+kable(pp_berl %>% group_by(as.factor(primary_fuel)) %>%  
+  summarise(mean = mean(capacity_mw), sum = sum(capacity_mw), pcnt = sum(capacity_mw)/4408) %>% 
+  arrange(sum), caption = "Statistics of capacity for different types of generators")
+
+
+power_plants_65 <- pp_berl %>% group_by(as.factor(primary_fuel)) %>%  
+  summarise(mean = mean(capacity_mw), sum = sum(capacity_mw), pcnt = sum(capacity_mw)/4408)
+
+write.csv(power_plants_65, "pp_65.csv")
+```
+
+
+
+
+```{r}
+
+pp_berl$distance_km <- pp_berl$distance/1000
+
+pp_berl$losses_pcnt <- ((pp_berl$capacity_mw)^2 * 2.65 * 10^(-8) * pp_berl$distance / (0.038/2)^2*pi / 220^2)/pp_berl$capacity_mw * 100
+
+pp_berl$losses <- ((pp_berl$capacity_mw)^2 * 2.65 * 10^(-8) * pp_berl$distance / (0.038/2)^2*pi / 220^2)
+
+
+```
+
+```{r, echo = F, include = T}
+
+emis <- data.frame(type =c("Coal", "Gas", "Oil", "Biomass"),
+                   gCO2_MJ = c(110, 65, 85, NA),
+                   gCH4_GJ = c(5.5, 3, 8, NA),
+                   gN2O_GJ = c(2,2,1,NA))
+
+kable(emis)
+```
+
+# Equations
+
+## Constraint
+
+### Necessary capacity constraint
+
+The necessary capacity for Berlin is approximately 2200 MWh during the daytime and 800 during nighttime. It is a convex combination of generators, which could lead To meet this condition we use the following equations:
+
+$$
+\sum_{p}(C_{c,p} \, \theta_{c}) \ge CAPACITY_{c}  \ \ \ \  \forall \, c
+$$
+$$
+\sum_{c}(CAPACITY_{c}) \ge \sum_{p} \biggl(  \theta_{c} \sum_{c}(C_{c,p})\biggr)
+$$
+$C$ is capacity [MWh],  $\theta$ is the variable we want to find out about, $c$ are the different capacities associated to the $p$, individual power plants.
+
+
+The total capacity must be equal to the needed capacity.
+
+
+## Objective functions
+
+### Power generation: Thermal efficiency
+
+The thermal efficiency of the electrical power generation is defined as the electrical energy produced divided by the total energy released by the fuel consumed. The waste heat of the power cycle goes into cooling water and the exhaust gases that exit from the power plant stacks.
+
+$$
+\sum_{l}(C_{c, \ p}\    L_{l,\ p} \theta_{c}) = LOSSES_{l}
+$$
+
+$L$ is the loss potential, that is $1 - EF$ with $EF$ being thermal efficiency. $\theta$ is the unknown parameter that describes how much of the entire capacity of the generator should be used.
+
+The losses are given by the capacity of the single generator multiplied to 1 - efficiency [MWh].
+
+### Emissions from power plants
+
+Source: Greenhouse Gas Emissions from Fossil Fuel Fired Power Generation Systems
+
+$$
+\sum_{p}(C_{c,\ p} EP_{CO^2_{em,\ p}}\theta_{c}) = EMISSIONS_{CO^2_{em}}
+$$
+
+$$
+\sum_{p}(C_{c,\ p} EP_{N^2O_{em,\ p}}\theta_{c}) = EMISSIONS_{N^2O_{em}}
+$$
+
+$$
+\sum_{p}(C_{c,\ p} EP_{CH4_{em,\ p}}\theta_{c}) = EMISSIONS_{CH4_{em}}
+$$
+
+$c$ is the capacity of every single generator, $EP$ is the emission potential, $\theta$ is the unknown parameter that describes how much of the entire capacity of the generator should be used.
+
+The sum of all emissions come from the individual generators.
+
+# Questions & doubts
+
+## Group power plant by type
+
+This way, it becomes more similar to the watershed model, and it is in gneral cleaner.
+
+Pro: cleaner result visualisation, option to make power plant "mixes" resembling the real Berlin energy use
+
+Cons: lose distance and power losses by distance, which are in fact negligible when the distance is < 100km, and would not matter. Loss of individual capacities 
+
+```{r}
+
+pp_group <- pp_berl %>% group_by(primary_fuel) %>% 
+  summarise(capacity = sum(capacity_mw), cap_pcnt = sum(capacity_mw)/sum(pp_berl$capacity_mw), distance = sum(distance), loss = sum(losses), loss_pcnt = sum(losses_pcnt))
+
+arrange(pp_group)
+
+pp_group$renewable <- c("y","n", "n","y","n", "y","y","y")
+
+pp_group$renewable <- c("y","n", "n","n","y", "y")
+
+pp_group$co2 <- c(NA, 110, 65, 85, 0, NA, NA, NA)
+
+pp_group$ch4 <- c(NA, 5.5, 3, 8, 0, NA, NA, NA)
+
+pp_group$n2o <- c(NA, 2, 2, 1, 0, NA, NA, NA)
+
+View(pp_group)
+
+ggplot(pp_group) +
+  geom_col(aes(y = cap_pcnt, x = as.factor(primary_fuel), fill = primary_fuel)) 
+
+
+pp_csv <- pp_group %>% 
+  select(fuel, capacity, distance, loss, renewable, co2, ch4, n2o)
+
+pp_csv$efficiency <- eff
+
+write_csv(pp_csv, "Data_pp1.csv")
+
+```
+
+```{r}
+
+monthly_eu <- read_csv("monthly_eu_energy.csv") %>% 
+  janitor::clean_names()
+
+str(monthly_eu)
+
+monthly_de <- monthly_eu %>% 
+  filter(geo == "DE")
+
+monthly_de <- monthly_de %>%  group_by(time_period) %>% 
+  summarise(capacity_gwh =  sum(obs_value))
+
+monthly_de <- monthly_de[61:72,]
+
+View(monthly_de)
+
+library(zoo)
+
+date_arr <- (seq.Date(from = as.Date("2021-01-01"), to = as.Date("2021-12-01"), length.out = 12))
+
+ggplot(monthly_de) +
+  geom_line(aes(x = date_arr, y = as.double(capacity_gwh)/10000)) +
+  ylab("TWh") +
+  ggtitle("Berlin total energy consumption for 2021")
+
+mean(monthly_de$capacity_gwh)
+
+monthly_de$capacity_gwh <- monthly_de$capacity_gwh * 1.154093 /100
+
+monthly_de$night <-  2* monthly_de$capacity_gwh * 0.3
+
+monthly_de$day <- 2* monthly_de$capacity_gwh * 0.7
+
+write_csv(monthly_de, "monthly_pwr.csv")
+
+berlin_mix <- data.frame(type = c("coal", "gas", "biomass", "solar", "waste"),
+                         production_pcnt = c("57.2", "29.3", "8.7", "2.6", "2.3"))
+
+```
+57.2% hard coal, 29.3 % natural gas, 8.7 % lignite, 2.6 renewables, 2.3 others
+
+## Include more than 1 city
+
+This would only change the total capacity needed, but would create problems with the distance calculation. Since distance is not that important, it could be implemented.
+
+Pros: model is more realistic we add zonal emission calculations & constraints based on that
+
+Ex.: GHG emitting generators have to be chosen further away from cities, total emissions in a certain area
+
+Cons: doesn't add complexity unless adding zonal emission calculations, which could be very hard to do
+
+## Why Berlin?
+
+Data quantity higher and more accurate, also diversity in power plant fuels.
+
+Berlin's energy production shares are so composed: 
+
+57.2% hard coal, 29.3 % natural gas, 8.7 % lignite, 2.6 renewables, 2.3 others.
+
+
+36.2 % mineral oil, 30.2 % natural gas, 15.1 % coal, 4.6 %  lignite, 9.8% Other, 4% renewable (3.6% biomass, )
+
+# References, sources
+
+Idea for the model from:
+
+https://www.scirp.org/journal/paperinformation.aspx?paperid=90326
+
+Power plant data:
+
+http://datasets.wri.org/dataset/globalpowerplantdatabase
+
+Emission parameters:
+
+https://op.europa.eu/en/publication-detail/-/publication/221658dd-9556-4591-86ea-51544346a8f7
+
+Generation losses parameters:
+
+various
+
+Berlin energy use data:
+
+https://www.stromnetz.berlin/uber-uns/zahlen-daten-fakten
